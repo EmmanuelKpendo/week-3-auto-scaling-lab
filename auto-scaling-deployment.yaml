@@ -1,0 +1,6 @@
+template-file-path: auto-scaling.yaml
+parameters:
+  KeyPair: SecureVPC
+  ImageId: '{{resolve:ssm:/auto-scaling-lab:1}}'
+  LabTag: week3_lab1
+tags: {}
