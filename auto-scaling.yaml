@@ -1,42 +1,168 @@
-AWSTemplateFormatVersion: '2010-09-09'
+AWSTemplateFormatVersion: "2010-09-09"
 Description: Auto-scaling Apache web server with CPU-based scaling policies
 
 Parameters:
-  KeyName:
-    Description: Name of an existing EC2 KeyPair to enable SSH access
-    Type: AWS::EC2::KeyPair::KeyName
-    ConstraintDescription: Must be the name of an existing EC2 KeyPair
-  VpcId:
-    Description: ID of the VPC
-    Type: AWS::EC2::VPC::Id
-  PublicSubnet1:
-    Description: Public subnet 1 for the load balancer
-    Type: AWS::EC2::Subnet::Id
-  PublicSubnet2:
-    Description: Public subnet 2 for the load balancer
-    Type: AWS::EC2::Subnet::Id
-  PrivateSubnet1:
-    Description: Private subnet 1 for the web servers
-    Type: AWS::EC2::Subnet::Id
-  PrivateSubnet2:
-    Description: Private subnet 2 for the web servers
-    Type: AWS::EC2::Subnet::Id
-  LabTag:
-    Description: Lab identifier tag
+  AmiId:
     Type: String
+    Description: AMI ID for EC2 instances
+    Default: "{{resolve:ssm:/auto-scaling-lab/ireland/ami-id:1}}"
+
+  LabTag:
+    Type: String
+    Description: Weekly lab identifier tag
     Default: week3_lab1
 
+  KeyPair:
+    Description: EC2 Key Pair for SSH access
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: secure-vpc-key-pair
+
 Resources:
-  WebServerSecurityGroup:
+  # VPC and Subnets
+  AutoScalingVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.20.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: AutoScalingLabVPC
+        - Key: lab
+          Value: !Ref LabTag
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: lab
+          Value: !Ref LabTag
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref AutoScalingVPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref AutoScalingVPC
+      CidrBlock: 10.20.1.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags:
+        - Key: lab
+          Value: !Ref LabTag
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref AutoScalingVPC
+      CidrBlock: 10.20.3.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      Tags:
+        - Key: lab
+          Value: !Ref LabTag
+
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref AutoScalingVPC
+      CidrBlock: 10.20.2.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags:
+        - Key: lab
+          Value: !Ref LabTag
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref AutoScalingVPC
+      CidrBlock: 10.20.4.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      Tags:
+        - Key: lab
+          Value: !Ref LabTag
+
+  # Public Route Table and Routes
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref AutoScalingVPC
+      Tags:
+        - Key: lab
+          Value: !Ref LabTag
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  # Security Groups
+  LoadBalancerSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Enable HTTP access via the load balancer and SSH access
-      VpcId: !Ref VpcId
+      GroupDescription: Allow HTTP from internet
+      VpcId: !Ref AutoScalingVPC
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 80
           ToPort: 80
-          SourceSecurityGroupId: !GetAtt LoadBalancerSecurityGroup.GroupId
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: lab
+          Value: !Ref LabTag
+
+  # SSM Role and Instance Profile for EC2 instances
+  SSMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Tags:
+        - Key: lab
+          Value: !Ref LabTag
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref SSMRole
+
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable HTTP access from ALB and SSH access
+      VpcId: !Ref AutoScalingVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
         - IpProtocol: tcp
           FromPort: 22
           ToPort: 22
@@ -45,232 +171,217 @@ Resources:
         - Key: lab
           Value: !Ref LabTag
 
-  LoadBalancerSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: Enable HTTP access to the load balancer
-      VpcId: !Ref VpcId
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 80
-          ToPort: 80
-          CidrIp: 0.0.0.0/0
-      Tags:
-        - Key: lab
-          Value: !Ref LabTag
-
-  WebServerLaunchTemplate:
+  # Launch Template for EC2 instances
+  LaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
     Properties:
-      LaunchTemplateName: WebServerLaunchTemplate
+      LaunchTemplateName: WebLaunchTemplate
       LaunchTemplateData:
-        ImageId: ami-03400c3b73b5086e9
+        ImageId: !Ref AmiId
         InstanceType: t2.micro
-        KeyName: !Ref KeyName
+        IamInstanceProfile:
+          Arn: !GetAtt InstanceProfile.Arn
         SecurityGroupIds:
-          - !GetAtt WebServerSecurityGroup.GroupId
-        TagSpecifications:
-          - ResourceType: instance
-            Tags:
-              - Key: lab
-                Value: !Ref LabTag
-          - ResourceType: volume
-            Tags:
-              - Key: lab
-                Value: !Ref LabTag
+          - !GetAtt InstanceSecurityGroup.GroupId
+        KeyName: !Ref KeyPair
         UserData:
           Fn::Base64: !Sub |
             #!/bin/bash -xe
-            # Install Apache Server
             yum update -y
             yum install -y httpd stress
-            systemctl start httpd
             systemctl enable httpd
-            
-            # Create a simple web page that shows instance info
-            INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
-            IP_ADDRESS=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)
-            
-            cat > /var/www/html/index.html <<EOF
+            systemctl start httpd
+
+            # Use IMDSv2 to get instance metadata
+            TOKEN=$(curl -X PUT "http://169.254.169.254/latest/api/token" \
+                          -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+
+            INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
+                          http://169.254.169.254/latest/meta-data/instance-id)
+
+            IP_ADDRESS=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
+                          http://169.254.169.254/latest/meta-data/local-ipv4)
+
+            cat <<EOF > /var/www/html/index.html
             <html>
             <head>
                 <title>Apache Web Server (Auto scaling lab)</title>
-            <style>
-              body { text-align: center; padding: 3.5rem; }
+                <style>
+                    body { text-align: center; padding: 3.5rem; }
               button { padding: 0.6rem 1.2rem; font-size: 1rem; margin: 1.2rem; cursor: pointer; }
-              .info { font-size: 1.1rem; margin: 1.2rem; padding: 0.8rem; background: #f0f0f0; border-radius: 5px; }
-            </style>
+            .info { font-size: 1.1rem; margin: 1.2rem; padding: 0.8rem; background: #f0f0f0; border-radius: 5px; }
+                </style>
             </head>
             <body>
-            <h1>Apache Web Server (Auto scaling lab)</h1>
-            <div class="info">
-              Hello from $IP_ADDRESS / $INSTANCE_ID
-            </div>
-            <button onclick="stressCPU()">Stress CPU</button>
-            <script>
-              function stressCPU() {
+                <div class="info">
+                  <h1>Hello from $IP_ADDRESS / $INSTANCE_ID</h1>
+                  <button onclick="stressCPU()">Stress CPU</button>
+                </div>
+                <script>
+                  function stressCPU() {
                 fetch('/stress-cpu', { method: 'POST' }).then(response => {
                   if(response.ok) {
                     alert('CPU stress test started for 30 seconds! Watch for scaling activity.');
                   } else {
                     alert('Failed to start stress test.');
                   }
-                })
-                .catch(error => alert(`Error: ${error}`));
+                }).catch(error => alert(Error: ${error}));
               }
-            </script>
+                </script>
             </body>
             </html>
             EOF
-            
-            # Create endpoint for stress test
-            cat > /var/www/html/stress-cpu <<EOF
+
+            # Create endpoint for CPU stress
+            cat <<EOF > /var/www/html/stress-cpu
             #!/bin/bash
             echo "Content-type: text/html"
             echo ""
             echo "<html><body>"
-            echo "Starting CPU stress test for 30 seconds..."
-            stress --cpu 1 --timeout 30 &
-            echo "Done"
+            echo "Starting CPU stress test for 90 seconds..."
             echo "</body></html>"
+            nohup stress --cpu 2 --timeout 90 >/dev/null 2>&1 &
             EOF
-            
             chmod +x /var/www/html/stress-cpu
+            ln -s /var/www/html/stress-cpu /var/www/cgi-bin/stress-cpu
 
-  WebServerAutoScalingGroup:
+      TagSpecifications:
+        - ResourceType: launch-template
+          Tags:
+            - Key: lab
+              Value: !Ref LabTag
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: AutoScalingLabTG
+      VpcId: !Ref AutoScalingVPC
+      Port: 80
+      Protocol: HTTP
+      TargetType: instance
+      HealthCheckPath: /index.html
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 2
+      Tags:
+        - Key: lab
+          Value: !Ref LabTag
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: AutoScalingALB
+      Subnets:
+        - !Ref PublicSubnet
+        - !Ref PublicSubnet2
+      SecurityGroups:
+        - !Ref LoadBalancerSecurityGroup
+      Scheme: internet-facing
+      Type: application
+      Tags:
+        - Key: lab
+          Value: !Ref LabTag
+
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+
+  AutoScalingGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
-      AutoScalingGroupName: WebServerASG
-      LaunchTemplate:
-        LaunchTemplateId: !Ref WebServerLaunchTemplate
-        Version: !GetAtt WebServerLaunchTemplate.LatestVersionNumber
-      MinSize: 1
-      MaxSize: 3
-      DesiredCapacity: 1
       VPCZoneIdentifier:
-        - !Ref PrivateSubnet1
-        - !Ref PrivateSubnet2
+        - !Ref PublicSubnet
+        - !Ref PublicSubnet2
+      MinSize: "1"
+      MaxSize: "3"
+      DesiredCapacity: "1"
       TargetGroupARNs:
-        - !Ref WebServerTargetGroup
+        - !Ref TargetGroup
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      Cooldown: 60
       HealthCheckType: ELB
-      HealthCheckGracePeriod: 300
+      HealthCheckGracePeriod: 60
       Tags:
         - Key: lab
           Value: !Ref LabTag
           PropagateAtLaunch: true
+        - Key: Name
+          Value: AutoScalingInstance
+          PropagateAtLaunch: true
 
-  WebServerScaleUpPolicy:
+  ScaleOutPolicy:
     Type: AWS::AutoScaling::ScalingPolicy
     Properties:
+      PolicyName: ScaleOutPolicy
+      AutoScalingGroupName: !Ref AutoScalingGroup
+      PolicyType: SimpleScaling
       AdjustmentType: ChangeInCapacity
-      AutoScalingGroupName: !Ref WebServerAutoScalingGroup
-      Cooldown: 60
       ScalingAdjustment: 1
-      Tags:
-        - Key: lab
-          Value: !Ref LabTag
+      Cooldown: 60
 
-  WebServerScaleDownPolicy:
+  ScaleInPolicy:
     Type: AWS::AutoScaling::ScalingPolicy
     Properties:
+      PolicyName: ScaleInPolicy
+      AutoScalingGroupName: !Ref AutoScalingGroup
+      PolicyType: SimpleScaling
       AdjustmentType: ChangeInCapacity
-      AutoScalingGroupName: !Ref WebServerAutoScalingGroup
-      Cooldown: 300
       ScalingAdjustment: -1
-      Tags:
-        - Key: lab
-          Value: !Ref LabTag
+      Cooldown: 60
 
-  CPUHighAlarm:
+  HighCPUAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmDescription: Alarm when CPU exceeds 50%
+      AlarmDescription: Alarm to scale out when CPU greater than 50%
       Namespace: AWS/EC2
       MetricName: CPUUtilization
       Dimensions:
         - Name: AutoScalingGroupName
-          Value: !Ref WebServerAutoScalingGroup
+          Value: !Ref AutoScalingGroup
       Statistic: Average
       Period: 60
       EvaluationPeriods: 2
       Threshold: 50
       ComparisonOperator: GreaterThanThreshold
       AlarmActions:
-        - !Ref WebServerScaleUpPolicy
+        - !Ref ScaleOutPolicy
       Tags:
-        - Key: lab
-          Value: !Ref LabTag
+        - Key: Name
+          Value: AutoScalingHighCPUAlarm
 
-  CPULowAlarm:
+  LowCPUAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmDescription: Alarm when CPU is less than 30%
+      AlarmDescription: Alarm to scale in when CPU less than or equals 50%
       Namespace: AWS/EC2
       MetricName: CPUUtilization
       Dimensions:
         - Name: AutoScalingGroupName
-          Value: !Ref WebServerAutoScalingGroup
+          Value: !Ref AutoScalingGroup
       Statistic: Average
       Period: 60
       EvaluationPeriods: 2
-      Threshold: 30
-      ComparisonOperator: LessThanThreshold
+      Threshold: 50
+      ComparisonOperator: LessThanOrEqualToThreshold
       AlarmActions:
-        - !Ref WebServerScaleDownPolicy
+        - !Ref ScaleInPolicy
       Tags:
-        - Key: lab
-          Value: !Ref LabTag
-
-  WebServerTargetGroup:
-    Type: AWS::ElasticLoadBalancingV2::TargetGroup
-    Properties:
-      Name: WebServerTargetGroup
-      Port: 80
-      Protocol: HTTP
-      VpcId: !Ref VpcId
-      HealthCheckPath: /
-      HealthCheckIntervalSeconds: 30
-      HealthCheckTimeoutSeconds: 5
-      HealthyThresholdCount: 2
-      UnhealthyThresholdCount: 2
-      TargetType: instance
-      Tags:
-        - Key: lab
-          Value: !Ref LabTag
-
-  WebServerLoadBalancer:
-    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
-    Properties:
-      Name: WebServerLoadBalancer
-      Subnets:
-        - !Ref PublicSubnet1
-        - !Ref PublicSubnet2
-      SecurityGroups:
-        - !GetAtt LoadBalancerSecurityGroup.GroupId
-      Scheme: internet-facing
-      Type: application
-      IpAddressType: ipv4
-      Tags:
-        - Key: lab
-          Value: !Ref LabTag
-
-  WebServerListener:
-    Type: AWS::ElasticLoadBalancingV2::Listener
-    Properties:
-      DefaultActions:
-        - Type: forward
-          TargetGroupArn: !Ref WebServerTargetGroup
-      LoadBalancerArn: !Ref WebServerLoadBalancer
-      Port: 80
-      Protocol: HTTP
-      Tags:
-        - Key: lab
-          Value: !Ref LabTag
+        - Key: Name
+          Value: AutoScalingLowCPUAlarm
 
 Outputs:
   LoadBalancerDNS:
-    Description: The DNS name of the load balancer
-    Value: !GetAtt WebServerLoadBalancer.DNSName
+    Description: ALB DNS Name
+    Value: !GetAtt LoadBalancer.DNSName
   LabTag:
-    Description: The lab tag applied to all resources
+    Description: The weekly lab tag applied to all resources
     Value: !Ref LabTag
