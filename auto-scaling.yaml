@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Auto-scaling Apache web server with CPU-based scaling policies and lab tag
+Description: Auto-scaling Apache web server with CPU-based scaling policies
 
 Parameters:
   KeyName:
@@ -24,7 +24,7 @@ Parameters:
   LabTag:
     Description: Lab identifier tag
     Type: String
-    Default: week2_lab1
+    Default: week3_lab1
 
 Resources:
   WebServerSecurityGroup:
@@ -64,7 +64,7 @@ Resources:
     Properties:
       LaunchTemplateName: WebServerLaunchTemplate
       LaunchTemplateData:
-        ImageId: ami-0c55b159cbfafe1f0 # Amazon Linux 2 AMI (update as needed)
+        ImageId: ami-03400c3b73b5086e9
         InstanceType: t2.micro
         KeyName: !Ref KeyName
         SecurityGroupIds:
@@ -81,7 +81,7 @@ Resources:
         UserData:
           Fn::Base64: !Sub |
             #!/bin/bash -xe
-            # Install Apache and stress tool
+            # Install Apache Server
             yum update -y
             yum install -y httpd stress
             systemctl start httpd
