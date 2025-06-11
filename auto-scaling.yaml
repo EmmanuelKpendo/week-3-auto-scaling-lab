@@ -2,27 +2,28 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: Auto-scaling Apache web server with CPU-based scaling policies
 
 Parameters:
-  AmiId:
+  ImageId:
     Type: String
-    Description: AMI ID for EC2 instances
-    Default: "{{resolve:ssm:/auto-scaling-lab/ireland/ami-id:1}}"
-
-  LabTag:
-    Type: String
-    Description: Weekly lab identifier tag
-    Default: week3_lab1
+    Description: EC2 Instance AMI
+    Default: "{{resolve:ssm:/auto-scaling-lab:1}}"
 
   KeyPair:
-    Description: EC2 Key Pair for SSH access
+    Description: EC2 Key Pair for SSH Access
     Type: AWS::EC2::KeyPair::KeyName
-    Default: secure-vpc-key-pair
+    Default: SecureVPC
+
+  LabTag:
+    Description: Week 3 lab tag
+    Type: String
+    Default: week3_lab1
+
 
 Resources:
-  # VPC and Subnets
+  # VPC Resource
   AutoScalingVPC:
     Type: AWS::EC2::VPC
     Properties:
-      CidrBlock: 10.20.0.0/16
+      CidrBlock: 10.0.0.0/16
       EnableDnsSupport: true
       EnableDnsHostnames: true
       Tags:
@@ -31,63 +32,64 @@ Resources:
         - Key: lab
           Value: !Ref LabTag
 
-  InternetGateway:
+  # Subnet and Internet Gateway Resources
+  AutoScalingIGW:
     Type: AWS::EC2::InternetGateway
     Properties:
       Tags:
         - Key: lab
           Value: !Ref LabTag
 
-  AttachGateway:
+  AttachAutoScalingGW:
     Type: AWS::EC2::VPCGatewayAttachment
     Properties:
       VpcId: !Ref AutoScalingVPC
-      InternetGatewayId: !Ref InternetGateway
+      InternetGatewayId: !Ref AutoScalingIGW
 
-  PublicSubnet:
+  AutoScalingPublicSubnet:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref AutoScalingVPC
-      CidrBlock: 10.20.1.0/24
+      CidrBlock: 10.0.1.0/24
       MapPublicIpOnLaunch: true
       AvailabilityZone: !Select [0, !GetAZs ""]
       Tags:
         - Key: lab
           Value: !Ref LabTag
 
-  PublicSubnet2:
+  AutoScalingPublicSubnet2:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref AutoScalingVPC
-      CidrBlock: 10.20.3.0/24
+      CidrBlock: 10.0.3.0/24
       MapPublicIpOnLaunch: true
       AvailabilityZone: !Select [1, !GetAZs ""]
       Tags:
         - Key: lab
           Value: !Ref LabTag
 
-  PrivateSubnet:
+  AutoScalingPrivateSubnet:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref AutoScalingVPC
-      CidrBlock: 10.20.2.0/24
+      CidrBlock: 10.0.2.0/24
       AvailabilityZone: !Select [0, !GetAZs ""]
       Tags:
         - Key: lab
           Value: !Ref LabTag
 
-  PrivateSubnet2:
+  AutoScalingPrivateSubnet2:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref AutoScalingVPC
-      CidrBlock: 10.20.4.0/24
+      CidrBlock: 10.0.4.0/24
       AvailabilityZone: !Select [1, !GetAZs ""]
       Tags:
         - Key: lab
           Value: !Ref LabTag
 
-  # Public Route Table and Routes
-  PublicRouteTable:
+  # Route Table and Security Groups
+  AutoScalingPublicRouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
       VpcId: !Ref AutoScalingVPC
@@ -95,27 +97,26 @@ Resources:
         - Key: lab
           Value: !Ref LabTag
 
-  PublicRoute:
+  AutoScalingPublicRoute:
     Type: AWS::EC2::Route
-    DependsOn: AttachGateway
+    DependsOn: AttachAutoScalingGW
     Properties:
-      RouteTableId: !Ref PublicRouteTable
+      RouteTableId: !Ref AutoScalingPublicRouteTable
       DestinationCidrBlock: 0.0.0.0/0
-      GatewayId: !Ref InternetGateway
+      GatewayId: !Ref AutoScalingIGW
 
   PublicSubnetRouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
-      SubnetId: !Ref PublicSubnet
-      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref AutoScalingPublicSubnet
+      RouteTableId: !Ref AutoScalingPublicRouteTable
 
   PublicSubnet2RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
-      SubnetId: !Ref PublicSubnet2
-      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref AutoScalingPublicSubnet2
+      RouteTableId: !Ref AutoScalingPublicRouteTable
 
-  # Security Groups
   LoadBalancerSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -130,8 +131,8 @@ Resources:
         - Key: lab
           Value: !Ref LabTag
 
-  # SSM Role and Instance Profile for EC2 instances
-  SSMRole:
+  # IAM Role and Instance Profile for SSM
+  AutoScalingSSMRole:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
@@ -147,11 +148,11 @@ Resources:
         - Key: lab
           Value: !Ref LabTag
 
-  InstanceProfile:
+  EC2InstanceProfile:
     Type: AWS::IAM::InstanceProfile
     Properties:
       Roles:
-        - !Ref SSMRole
+        - !Ref AutoScalingSSMRole
 
   InstanceSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -171,16 +172,16 @@ Resources:
         - Key: lab
           Value: !Ref LabTag
 
-  # Launch Template for EC2 instances
-  LaunchTemplate:
+  # Launch Template for Auto Scaling
+  EC2LaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
     Properties:
-      LaunchTemplateName: WebLaunchTemplate
+      LaunchTemplateName: AutoScalingLaunchTemplate
       LaunchTemplateData:
-        ImageId: !Ref AmiId
+        ImageId: !Ref ImageId
         InstanceType: t2.micro
         IamInstanceProfile:
-          Arn: !GetAtt InstanceProfile.Arn
+          Arn: !GetAtt EC2InstanceProfile.Arn
         SecurityGroupIds:
           - !GetAtt InstanceSecurityGroup.GroupId
         KeyName: !Ref KeyPair
@@ -204,31 +205,27 @@ Resources:
 
             cat <<EOF > /var/www/html/index.html
             <html>
-            <head>
+              <head>
                 <title>Apache Web Server (Auto scaling lab)</title>
                 <style>
-                    body { text-align: center; padding: 3.5rem; }
-              button { padding: 0.6rem 1.2rem; font-size: 1rem; margin: 1.2rem; cursor: pointer; }
-            .info { font-size: 1.1rem; margin: 1.2rem; padding: 0.8rem; background: #f0f0f0; border-radius: 5px; }
+                  body { text-align: center; padding: 3.5rem; }
+                  button { padding: 0.6rem 1.2rem; font-size: 1rem; margin: 1.2rem; cursor: pointer; }
                 </style>
-            </head>
-            <body>
-                <div class="info">
-                  <h1>Hello from $IP_ADDRESS / $INSTANCE_ID</h1>
-                  <button onclick="stressCPU()">Stress CPU</button>
+              </head>
+              <body>
+                <h1>Apache Web Server (Auto scaling lab)</h1>
+                <div>
+                  Hello from $IP_ADDRESS / $INSTANCE_ID
                 </div>
+                <button onclick="stressCPU()">Stress CPU</button>
                 <script>
-                  function stressCPU() {
-                fetch('/stress-cpu', { method: 'POST' }).then(response => {
-                  if(response.ok) {
-                    alert('CPU stress test started for 30 seconds! Watch for scaling activity.');
-                  } else {
-                    alert('Failed to start stress test.');
-                  }
-                }).catch(error => alert(Error: ${error}));
-              }
+                    function stressCPU() {
+                        fetch('/stress-cpu', { method: 'POST' })
+                            .then(response => alert('CPU stress test started for 90 seconds! Over 50% CPU utilization triggers scaling, watch for scaling activity.'))
+                            .catch(error => alert('Error: ' + error));
+                    }
                 </script>
-            </body>
+              </body>
             </html>
             EOF
 
@@ -251,7 +248,7 @@ Resources:
             - Key: lab
               Value: !Ref LabTag
 
-  TargetGroup:
+  LoadBalancerTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
       Name: AutoScalingLabTG
@@ -268,13 +265,14 @@ Resources:
         - Key: lab
           Value: !Ref LabTag
 
+  # Load Balancer and Listener
   LoadBalancer:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
       Name: AutoScalingALB
       Subnets:
-        - !Ref PublicSubnet
-        - !Ref PublicSubnet2
+        - !Ref AutoScalingPublicSubnet
+        - !Ref AutoScalingPublicSubnet2
       SecurityGroups:
         - !Ref LoadBalancerSecurityGroup
       Scheme: internet-facing
@@ -288,25 +286,26 @@ Resources:
     Properties:
       DefaultActions:
         - Type: forward
-          TargetGroupArn: !Ref TargetGroup
+          TargetGroupArn: !Ref LoadBalancerTargetGroup
       LoadBalancerArn: !Ref LoadBalancer
       Port: 80
       Protocol: HTTP
 
+  # Auto Scaling Group
   AutoScalingGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
       VPCZoneIdentifier:
-        - !Ref PublicSubnet
-        - !Ref PublicSubnet2
+        - !Ref AutoScalingPublicSubnet
+        - !Ref AutoScalingPublicSubnet2
       MinSize: "1"
       MaxSize: "3"
       DesiredCapacity: "1"
       TargetGroupARNs:
-        - !Ref TargetGroup
+        - !Ref LoadBalancerTargetGroup
       LaunchTemplate:
-        LaunchTemplateId: !Ref LaunchTemplate
-        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+        LaunchTemplateId: !Ref EC2LaunchTemplate
+        Version: !GetAtt EC2LaunchTemplate.LatestVersionNumber
       Cooldown: 60
       HealthCheckType: ELB
       HealthCheckGracePeriod: 60
@@ -318,6 +317,7 @@ Resources:
           Value: AutoScalingInstance
           PropagateAtLaunch: true
 
+  # Auto Scaling Policies and Alarms
   ScaleOutPolicy:
     Type: AWS::AutoScaling::ScalingPolicy
     Properties:
@@ -383,5 +383,5 @@ Outputs:
     Description: ALB DNS Name
     Value: !GetAtt LoadBalancer.DNSName
   LabTag:
-    Description: The weekly lab tag applied to all resources
+    Description: The lab tag applied to all resources
     Value: !Ref LabTag
